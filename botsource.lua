@@ -1,23 +1,32 @@
 local clickDraw = {pos=nil, color='green'}
-local CO, SC, FO, RE, WA, SA, AB, GE, IC, AL
+local CO, SC, FO, RE, WA, SA, AB, GE, IC, AL, SS
 Callback.Bind('Load', function() Callbacks() end)
 
 class 'Follow'
 function Follow:__init() 
 	self.Target = {Primary = nil, Secondary = nil}
 	self.tickTime = 0
+	self.mostFedTime = 1600
 	self.PrimaryLastMove = 0
 	self.lastAction = 0
 	Callback.Bind('RecvPacket', function(p) self:OnRecvPacket(p) end)
+	Callback.Bind('ProcessSpell', function(unit, spell) self:ProcessSpell(unit, spell) end)
 end
 
 function Follow:Tick()
 	if RE.GoingHome then return end
 	FO.tickTime = os.clock()
+	if FO.tickTime > FO.mostFedTime then
+		Follow:getMostFed()
+		FO.mostFedTime = FO.mostFedTime + 300
+	end
 	if FO.Target.Primary then
 		if self:allyInBase(FO.Target.Primary) or self:AFKCheck() then
 			if FO.Target.Secondary == nil or self:allyInBase(FO.Target.Secondary) then
-				self:getSecondary()
+				self:HugTurret()
+				if FO.Target.Secondary == nil then
+					self:getSecondary()
+				end
 			else
 				self:Pursue(FO.Target.Secondary)  --[[PUT WARD ROAMING HERE]]
 			end
@@ -63,6 +72,25 @@ function Follow:Pursue(ally)
 	end	
 end
 
+function Follow:getMostFed()
+	local mostKills = {ally=nil, count=0}
+	for name, count in pairs(GE.killCount) do
+		if name ~= myHero.name and (mostKills.ally == nil or mostKills.count < count) then
+			mostKills.ally = name
+			mostKills.count = count
+		end
+	end
+	if mostKills.ally then
+		for _, ally in ipairs(CO.allies) do
+			if ally.name == mostKills.ally then
+				FO.Target.Primary = ally
+				General:Print('Primary set to(most fed): '..ally.charName)
+				break
+			end
+		end
+	end
+end
+
 function Follow:autoAttack()
 	local trueRange = myHero.range+myHero.boundingRadius
 	for _, enemy in ipairs(CO.enemies) do
@@ -94,7 +122,7 @@ function Follow:autoAttack()
 end
 
 function Follow:allyInBase(ally)
-	return ally.dead or ally.pos:DistanceTo(GE.StartPos) < 3000 or General:IsRecalling(ally)
+	return ally.dead or (ally.pos:DistanceTo(GE.StartPos) < 3000 and myHero.pos:DistanceTo(ally.pos) > 3000) or General:IsRecalling(ally)
 end
 
 function Follow:getSecondary()
@@ -108,9 +136,11 @@ function Follow:getSecondary()
 	end	
 	if allyClosest then 
 		FO.Target.Secondary = allyClosest
-		Game.Chat.Print('Secondary - '..allyClosest.charName)
+		General:Print('Secondary - '..allyClosest.charName)
 	else 
 		FO.Target.Secondary = nil
+		Recall:GetSafeRecallPos()
+		RE.GoingHome = true
 	end
 end
 
@@ -135,13 +165,16 @@ function Follow:getPrimary()
 	end	
 	if possibleADC == 1 then 
 		FO.Target.Primary = LastCandidate
-		Game.Chat.Print('Primary - '..LastCandidate.charName)
+		General:Print('Primary - '..LastCandidate.charName)
 	else
 		self:getPrimaryBackup()
 	end
 end
 
 function Follow:getPrimaryBackup()
+	if Game.Timer() < 80 then 
+		--self:getPrimaryBackup()
+	return end
 	local FromBottom = Geometry.Vector3(12321, 54, 1643)
 	local closest = nil
 	for _, ally in ipairs(CO.allies) do
@@ -152,7 +185,7 @@ function Follow:getPrimaryBackup()
 		end
 	end		
 	FO.Target.Primary = closest
-	Game.Chat.Print('Primary - '..closest.charName)
+	General:Print('Primary - '..closest.charName)
 end
 
 function Follow:smiteCheck(ally)
@@ -165,6 +198,24 @@ function Follow:moveToBotLane()
 	elseif myHero.team == 200 and myHero.pos:DistanceTo(GE.StartPos) < 600 then
 		myHero:Move(12850, 4200)
 	end	
+end
+
+function Follow:HugTurret()
+	if Game.Timer() > 1300 then return end
+	for i, turret in ipairs(CO.atowers) do
+		Core.OutputDebugString(tostring(i))
+		if turret and not turret.dead and turret.valid and turret.name and turret.name:find('R_03') and turret.health and turret.health > 400 then
+			FO.Target.Secondary = turret
+			return
+		end
+	end
+	FO.Target.Secondary = nil
+end
+
+function Follow:ProcessSpell(unit, spell)
+	if unit and unit == FO.Target.Primary then
+		FO.PrimaryLastMove = os.clock()
+	end
 end
 
 function Follow:OnRecvPacket(p)
@@ -259,69 +310,77 @@ function Warding:__init()
 	self.LastWard = 0
 	self.wardPositions = {}
 	self.wardSpots = {
-		{ x = 2823.37, y = 55.03, z = 7617.03},     -- BLUE GOLEM
-		{ x = 7422, y = 46.53, z = 3282},     -- BLUE LIZARD
-		{ x = 10148, y = 44.41, z = 2839},     -- BLUE TRI BUSH
-		{ x = 6269, y = 42.51, z = 4445},     -- BLUE PASS BUSH
-		{ x = 7151.64, y = 51.67, z = 4719.66},     -- BLUE RIVER ENTRANCE
-		{ x = 4728, y = -51.29, z = 8336},     -- BLUE RIVER ROUND BUSH
-		{ x = 6762.52, y = 55.68, z = 2918.75},     -- BLUE SPLIT PUSH BUSH
-		{ x = 11217.39, y = 54.87, z = 6841.89},     -- PURPLE GOLEM
-		{ x = 6610.35, y = 54.45, z = 11064.61},    -- PURPLE LIZARD
-		{ x = 3883, y = 39.87, z = 11577},    -- PURPLE TRI BUSH
-		{ x = 7775, y = 43.14, z = 10046.49}, -- PURPLE PASS BUSH
-		{ x = 6867.68, y = 57.01, z = 9567.63},     -- PURPLE RIVER ENTRANCE
-		{ x = 9720.86, y = 54.85, z = 7501.50},     -- PURPLE ROUND BUSH
-		{ x = 9233.13, y = -44.63, z = 6094.48},     -- PURPLE RIVER ROUND BUSH
-		{ x = 7282.69, y = 52.59, z = 11482.53},    -- PURPLE SPLIT PUSH BUSH
-		{ x = 10180.18, y = -62.32, z = 4969.32},      -- DRAGON
-		{ x = 8875.13, y = -64.07, z = 5390.57}, -- DRAGON BUSH
-		{ x = 3920.88, y = -60.42, z = 9477.78},      -- BARON
-		{ x = 5017.27, y = -62.70, z = 8954.09}, -- BARON BUSH   
-		{ x = 12657.58, y = 49.99, z = 1969.98}, -- BOT SIDE BUSH
-		{ x = 12321.70, y = 49.77, z = 1643.73}, -- BOT SIDE BUSH
-		{ x = 9641.6591796875,  y = 53.01416015625,  z = 6368.748046875},
-		{ x = 8081.4360351563,  y = 55.9482421875,  z = 4683.443359375},
-		{ x = 5943.51953125,  y = 53.189331054688,  z = 9792.4091796875},
-		{ x = 4379.513671875,  y = 42.734619140625,  z = 8093.740234375},
-		{ x = 4222.724609375,  y = 53.612548828125,  z = 7038.5805664063},
-		{ x = 9068.0224609375,  y = 53.22705078125,  z = 11186.685546875},
-		{ x = 7970.822265625,  y = 53.527709960938,  z = 10005.072265625},
-		{ x = 4978.1943359375,  y = 54.343017578125,  z = 3042.6975097656},
-		{ x = 7907.6357421875,  y = 49.947143554688,  z = 11629.322265625},
-		{ x = 7556.0654296875,  y = 50.61547851625,  z = 11739.625},
-		{ x = 5973.4853515625,  y = 54.348999023438,  z = 11115.6875},
-		{ x = 5732.8198242188,  y = 53.397827148438,  z = 10289.76953125},
-		{ x = 7969.15625,  y = 56.940795898438,  z = 3307.5673828125},
-		{ x = 12073.184570313,  y = 52.322265625,  z = 4795.50390625},
-		{ x = 4044.1313476563,  y = 48.591918945313,  z = 11600.502929688},
-		{ x = 5597.6669921875,  y = 39.739379882813,  z = 12491.047851563},
-		{ x = 10070.202148438,  y = -60.332153320313,  z = 4132.4536132813},
-		{ x = 8320.2890625,  y = 56.473876953125,  z = 4292.8090820313},
-		{ x = 9603.5205078125,  y = 54.713745117188,  z = 7872.2368164063},
-		{x = 9843.38, y = 43.02, z = 3125.16},
-		{x = 4214.93, y = 36.62, z = 11202.01},
-		{x = 2267.97, y = 44.20, z = 10783.37},
-		{x = 5688.96, y = 45.64, z = 7825.20},
-		{x = 7927.65, y = 47.71, z = 4239.77},
-		{x = 8539.27, y = 46.98, z = 6637.38},
-		{x = 11974.23, y = 42.84, z = 3807.21},
+		{ x = 3310, 	y = 55, 	z = 7800},
+		{ x = 7110, 	y = 46, 	z = 3087},
+		{ x = 10400,	y = 44, 	z = 3036},
+		{ x = 6580, 	y = 42, 	z = 4690},
+		{ x = 7950, 	y = 51, 	z = 5500},
+		{ x = 4850, 	y = 51, 	z = 8345},
+		{ x = 6625, 	y = 55, 	z = 3125},
+		{ x = 11602, 	y = 54, 	z = 7067},
+		{ x = 6471, 	y = 54, 	z = 11357},
+		{ x = 2939, 	y = 39, 	z = 11294},
+		{ x = 7242, 	y = 43, 	z = 9768},
+		{ x = 6613, 	y = 57, 	z = 8375},
+		{ x = 10073,	y = 54, 	z = 7762},
+		{ x = 9387, 	y = 44, 	z = 5682},
+		{ x = 7053, 	y = 52, 	z = 11376},
+		{ x = 10553, 	y = 62, 	z = 5105},
+		{ x = 8267, 	y = 64, 	z = 5559},
+		{ x = 4337, 	y = 60, 	z = 9777},
+		{ x = 5245, 	y = 62, 	z = 9125},
+		{ x = 13382, 	y = 49, 	z = 2437},
+		{ x = 12465, 	y = 49, 	z = 1457},
+		{ x = 9719,  	y = 53,  	z = 6347},
+		{ x = 8500,  	y = 55,  	z = 4843},
+		{ x = 6284,  	y = 53,  	z = 10085},
+		{ x = 4137,  	y = 42,  	z = 7970},
+		{ x = 4698,  	y = 53,  	z = 7182},
+		{ x = 9241,  	y = 53,  	z = 11349},
+		{ x = 8271,  	y = 53,  	z = 10217},
+		{ x = 5465,  	y = 54,  	z = 3493},
+		{ x = 8253,  	y = 49,  	z = 11782},
+		{ x = 7754,  	y = 50,  	z = 11845},
+		{ x = 2306,  	y = 54,  	z = 9700},
+		{ x = 5492,  	y = 53,  	z = 10406},
+		{ x = 8010,  	y = 56,  	z = 3440},
+		{ x = 12543,  	y = 52,  	z = 5096},
+		{ x = 4396,  	y = 48,  	z = 11794},
+		{ x = 5650,  	y = 39,  	z = 12692},
+		{ x = 9514,  	y = 60,  	z = 4154},
+		{ x = 7549,  	y = 56,  	z = 7404},
+		{ x = 9170,  	y = 54,  	z = 2170},
+		{ x = 2300, 	y = 44, 	z = 9703},
+		{ x = 8424, 	y = 46, 	z = 6487},
+		{ x = 11823, 	y = 42, 	z = 3873},
 	}
-	Callback.Bind('CreateObj', function(o) self:OnCreateObj(o) end)
-	Callback.Bind('DeleteObj', function(o) self:OnDeleteObj(o) end)
+	Callback.Bind('RecvPacket', function(p) self:RecvPacket(p) end)
 end
 
-function Warding:OnCreateObj(o)
-	if o.name:find('Ward') and o.team == myHero.team then
-		table.insert(WA.wardPositions, #WA.wardPositions+1, o)
-	end	
-end
-
-function Warding:OnDeleteObj(o)
-	if o.name:find('Ward') and o.team == myHero.team then
-		for i, ward in pairs(WA.wardPositions) do
-			if ward and o.pos:DistanceTo(ward.pos) < 80 then 
-			table.remove(WA.wardPositions, i)
+function Warding:RecvPacket(p)
+	if p.header == 181 then
+		p.pos = 1
+		local hero = Game.ObjectByNetworkId(p:Decode4())
+		if hero and hero.team == myHero.team then
+			p:Skip(7)
+			local packetID = p:Decode2()
+			local wardIDS = {[14481] = true, [14482] = true, [41332] = true, [18926] = true, [15470] = true, [58660] = true, [14483] = true, [2084] = true, [35170] = true,}		
+			if wardIDS[packetID] then
+				p:Skip(2)
+				local wardID = p:Decode4()+1
+				p:Skip(21)
+				local v3 = Geometry.Vector3(p:DecodeF(), p:DecodeF(), p:DecodeF())
+				table.insert(WA.wardPositions, #WA.wardPositions+1, { pos = v3, id = wardID })
+			end
+		end
+	end		
+	if p.header == 158 then
+		p.pos = 1
+		local wardId = p:Decode4()
+		for i=1, #WA.wardPositions do
+			if WA.wardPositions[i] and WA.wardPositions[i].id and WA.wardPositions[i].id == wardId then
+				table.remove(WA.wardPositions, i)
+				break
 			end
 		end
 	end
@@ -329,7 +388,7 @@ end
 				
 function Warding:Tick()
 	local currentTime = os.clock()
-	if #WA.wardPositions >= 4 or (WA.LastWard+4) > currentTime then return end
+	if (WA.LastWard+4) > currentTime then return end
 	
 	local WardSlot = self:GetWardSlot()
 	if WardSlot then
@@ -340,16 +399,15 @@ function Warding:Tick()
 				for i=1, #WA.wardPositions do
 					local ward = WA.wardPositions[i]
 					if ward then
-						if wardNear == nil or myHero.pos:DistanceTo(ward.pos) < myHero.pos:DistanceTo(wardNear.pos) then
+						if wardNear == nil or spot:DistanceTo(ward.pos) < spot:DistanceTo(wardNear.pos) then
 							wardNear = ward
 						end
 					end
 				end			
-				if wardNear == nil or (wardNear and myHero.pos:DistanceTo(wardNear.pos) > 1200) then  			
+				if wardNear == nil or (wardNear and spot:DistanceTo(wardNear.pos) > 1200) then  			
 					FO.lastAction = os.clock()
 					myHero:CastSpell(WardSlot, spot.x, spot.z)
 					WA.LastWard = os.clock()
-					self:addPlacedWard(spot.x, spot.y, spot.z)
 				end
 			end
 		end
@@ -373,20 +431,6 @@ function Warding:CheckForWard(id)
 		end
 	end
 	return 0
-end
-
-function Warding:addPlacedWard(x,y,z)
-	local tmpID = math.random(1,10000)
-	table.insert(WA.wardPositions, {id = tmpID, pos = Geometry.Vector3(x, y, z)})
-end
-
-function Warding:removePlacedWard(id)
-	for i, ward in pairs(WA.wardPositions) do
-		if ward.id == id then
-			table.remove(WA.wardPositions, i)
-			break
-		end
-	end
 end
 
 class 'Safety'
@@ -413,7 +457,8 @@ function Safety:AvoidTowers()
 end
 
 function Safety:InDanger()
-	return SA.HaveTowerAgro or SA.HeroAggro >= 2 or SA.MinionAggro >= (myHero.level+1) or SA.DragonAggro or SA.BaronAggro or SA.FallBackPing > os.clock() or (GE.ClosestEnemy ~= nil and not GE.ClosestEnemy.dead and myHero.pos:DistanceTo(GE.ClosestEnemy.pos) < 250) or SA.MinionAggro >= (myHero.level+1)
+	-- or SA.DragonAggro or SA.BaronAggro
+	return SA.HaveTowerAgro or SA.HeroAggro >= 1 or SA.MinionAggro >= (myHero.level+1) or SA.FallBackPing > os.clock() or (GE.ClosestEnemy ~= nil and not GE.ClosestEnemy.dead and myHero.pos:DistanceTo(GE.ClosestEnemy.pos) < 250) or SA.MinionAggro >= (myHero.level+1)
 end
 
 function Safety:Fallback()
@@ -542,6 +587,7 @@ end
 
 function AutoBuy:Tick()
 	if myHero.pos:DistanceTo(GE.StartPos) < 500 or myHero.dead then
+		SA.HeroAggro = 0
 		self:Items()
 		self:Potions()
 	end
@@ -605,6 +651,7 @@ function General:__init()
 	self.ClosestEnemy = nil
 	self.StayInBrush = false
 	self.StartPos = nil
+	self.killCount = {}
 	Callback.Bind('RecvPacket', function(p) self:OnRecvPacket(p) end)
 	Callback.Bind('SendPacket', function(p) self:OnSendPacket(p) end)
 end
@@ -615,17 +662,19 @@ function General:Tick()
 end
 
 function General:checkWaypoints()
+	Core.OutputDebugString('Starting Waypoint Check')
 	local wayPoints = myHero.path
-	for i=1, wayPoints.count do
+	for i=wayPoints.curPath, wayPoints.count do
 		local cP = (type(wayPoints:Path(i)) == 'Vector3') and wayPoints:Path(i) or nil
 		if cP then
 			for _, tower in ipairs(CO.etowers) do
 				if not tower.dead and cP:DistanceTo(tower.pos) < 1200 then
-					Game.Chat.Print('Walking into a Tower')
+					General:Print('Walking into a Tower')
 				end
 			end
 		end
 	end
+	Core.OutputDebugString('Finished Waypoint Check')
 end
 
 function General:IsRecalling(unit)
@@ -646,6 +695,10 @@ end
 
 function General:ActionSpamCheck()
 	return (self:StayAtFountain() or self:BlockRecallMovement()) and 15 or os.clock() - FO.lastAction
+end
+
+function General:Print(text)
+	Game.Chat.Print("<font color=\"#0099FF\">[Follower]</font> <font color=\"#FF6600\">"..text..".</font>")
 end
 
 function General:myManaPct()
@@ -712,13 +765,27 @@ function General:OnRecvPacket(p)
 	if p.header == 201 then
 		p.pos = 10
 		local yesCount = p:Decode1()
-		p:Skip(1) --no votes
+		local noCount = p:Decode1()
 		local totalVotes = p:Decode1()
 		if p:Decode4() == myHero.team then
 			if (totalVotes == 5 and yesCount == 3) or (totalVotes < 5 and yesCount == 2) then
-				Game.Chat.Print('Voted. - '..tostring(yesCount))
 				Game.Chat.Send('/ff')				
+			elseif noCount == 2 then
+				Game.Chat.Send('/noff')
 			end
+		end
+	end
+	if p.header == 94 then	
+		p.pos=10
+		local killer = Game.ObjectByNetworkId(p:Decode4())
+		if killer.team == myHero.team then
+			for name, kills in pairs(GE.killCount) do
+				if name == killer.name then
+					GE.killCount[name] = kills+1
+					return
+				end
+			end
+			GE.killCount[killer.name] = 1
 		end
 	end
 end
@@ -796,6 +863,18 @@ function CustomObjects:OnDeleteObj(o)
 			return
 		end
 	end
+	for i, t in ipairs(CO.etowers) do
+		if t == o then
+			table.remove(CO.etowers, i)
+			return
+		end
+	end
+	for i, t in ipairs(CO.atowers) do
+		if t == o then
+			table.remove(CO.atowers, i)
+			return
+		end
+	end
 	if o and o.name and o.name:find('nexus_explosion.troy') then
 		os.execute('TASKKILL /IM "League of Legends.exe"')
 	end
@@ -818,6 +897,7 @@ function Callbacks:OnGameStart()
 	GE = General()
 	IC = ItemCast()
 	AL = AutoLevel()
+	SS = SummSpells()
 	
 	GE.StartPos = (myHero.team == 100) and Geometry.Vector3(200, 90, 500) or Geometry.Vector3(13945, 90, 14210)
 	
@@ -831,20 +911,32 @@ function Callbacks:OnGameStart()
 	Callback.Bind('Tick', function() self:OnTick() end)
 	Callback.Bind('Draw', function() self:OnDraw() end)
 	Callback.Bind('WndMsg', function(msg, key) self:OnWndMsg(msg, key) end)
-	Game.Chat.Print('Follower loaded.')	
+	General:Print('Loaded')
 end
 
 function Callbacks:OnTick()
 	General:Tick()
+	--Core.OutputDebugString('General')
 	SpellCast:Tick()
+	--Core.OutputDebugString('SpellCast')
 	ItemCast:Tick()
+	--Core.OutputDebugString('ItemCast')
 	Recall:Tick()
+	--Core.OutputDebugString('Recall')
+	SummSpells:Tick()
+	--Core.OutputDebugString('SummonerSpells')
 	AutoBuy:Tick()
+	--Core.OutputDebugString('AutoBuy')
 	if RE.GoingHome then Recall:CastRecall() return end
+	--Core.OutputDebugString('CastRecall')
 	Safety:AvoidTowers()
+	--Core.OutputDebugString('AvoidTowers')
 	if Safety:InDanger() then Safety:Fallback() return end
+	--Core.OutputDebugString('Fallback')
 	Follow:Tick()
+	--Core.OutputDebugString('Follow')
 	Warding:Tick()	
+	--Core.OutputDebugString('Warding')
 end
 
 function Callbacks:OnDraw()
@@ -870,10 +962,11 @@ function Callbacks:OnWndMsg(m, k)
 		local sAlly = Game.Target()
 		if sAlly and sAlly.type == myHero.type and sAlly.team == myHero.team then
 			FO.Target.Primary = sAlly
+			General:Print('Primary Manually set to: '..sAlly.charName)
 		end
 	end
 	if k == string.byte('X') and m == 256 then
-		Game.Chat.Print(tostring(mousePos.x).."   "..tostring(mousePos.z))
+		General:Print(tostring(mousePos.x).."   "..tostring(mousePos.z))
 	end
 end
 
@@ -992,7 +1085,7 @@ function SpellCast:AutoW()
 end
 
 function SpellCast:AutoE()
-	if GE.ClosestEnemy and General:myManaPct() > 20 then
+	if GE.ClosestEnemy and (General:myManaPct() > 70 or myHero.level > 11) then
 		if myHero.pos:DistanceTo(GE.ClosestEnemy.pos) < SC.SpellData.eRange then
 			myHero:CastSpell(Game.Slots.SPELL_3, GE.ClosestEnemy)
 		else
@@ -1033,6 +1126,68 @@ function SpellCast:HasEBuff(unit)
 		end	
 	end
 	return false
+end
+
+class 'SummSpells'
+
+function SummSpells:__init()
+	local s1 = myHero:GetSpellData(Game.Slots.SUMMONER_1).name:lower()
+	local s2 = myHero:GetSpellData(Game.Slots.SUMMONER_2).name:lower()
+	self.summoner1 = (s1:find('summonerdot') and 'Ignite') or (s1:find('exhaust') and 'Exhaust') or (s1:find('flash') and 'Flash') or (s1:find('heal') and 'Heal') or nil
+	self.summoner2 = (s2:find('summonerdot') and 'Ignite') or (s2:find('exhaust') and 'Exhaust') or (s2:find('flash') and 'Flash') or (s2:find('heal') and 'Heal') or nil
+end
+
+function SummSpells:Tick()
+	if SS.summoner1 then
+		self[SS.summoner1]()
+	end
+	if SS.summoner2 then
+		self[SS.summoner2]()
+	end
+end
+
+function SummSpells:Flash()
+	if RE.GoingHome and RE.RecallPosition and GE.ClosestEnemy then
+		local slot = (myHero:GetSpellData(Game.Slots.SUMMONER_1).name:lower():find('flash') and Game.Slots.SUMMONER_1) or (myHero:GetSpellData(Game.Slots.SUMMONER_2).name:lower():find('flash') and Game.Slots.SUMMONER_2)
+		if myHero:CanUseSpell(slot) == Game.SpellState.READY and myHero.pos:DistanceTo(GE.ClosestEnemy.pos) < 700 then
+			myHero:CastSpell(slot, RE.RecallPosition.x, RE.RecallPosition.z)
+		end
+	end	
+end
+
+function SummSpells:Ignite()
+	local slot = (myHero:GetSpellData(Game.Slots.SUMMONER_1).name:lower():find('dot') and Game.Slots.SUMMONER_1) or (myHero:GetSpellData(Game.Slots.SUMMONER_2).name:lower():find('dot') and Game.Slots.SUMMONER_2)
+	if myHero:CanUseSpell(slot) == Game.SpellState.READY then
+		local function igniteDamage() return 50+(myHero.level*20) end
+		for _, enemy in ipairs(CO.enemies) do
+			if enemy and enemy.valid and not enemy.dead and myHero.pos:DistanceTo(enemy.pos) < 550 and igniteDamage() > enemy.health then
+				myHero:CastSpell(slot, enemy)
+				break
+			end
+		end
+	end
+end
+
+function SummSpells:Exhaust()
+	local slot = (myHero:GetSpellData(Game.Slots.SUMMONER_1).name:lower():find('exhaust') and Game.Slots.SUMMONER_1) or (myHero:GetSpellData(Game.Slots.SUMMONER_2).name:lower():find('exhaust') and Game.Slots.SUMMONER_2)
+	if myHero:CanUseSpell(slot) == Game.SpellState.READY then	
+		for _, enemy in ipairs(CO.enemies) do
+			if enemy and not enemy.dead and enemy.health/enemy.maxHealth < 0.45 and myHero.pos:DistanceTo(enemy.pos) < 600 then
+				myHero:CastSpell(slot, enemy)
+			end
+		end
+	end
+end
+
+function SummSpells:Heal()
+	local slot = (myHero:GetSpellData(Game.Slots.SUMMONER_1).name:lower():find('heal') and Game.Slots.SUMMONER_1) or (myHero:GetSpellData(Game.Slots.SUMMONER_2).name:lower():find('heal') and Game.Slots.SUMMONER_2)	
+	if myHero:CanUseSpell(slot) == Game.SpellState.READY then
+		for _, ally in ipairs(CO.allies) do
+			if ally and not ally.dead and ally.health/ally.maxHealth < 0.25 and myHero.pos:DistanceTo(ally.pos) < 600 and GE.ClosestEnemy and ally.pos:DistanceTo(GE.ClosestEnemy.pos) < 800 then
+				myHero:CastSpell(slot, ally.pos.x, ally.pos.z)
+			end
+		end
+	end
 end
 
 class 'AutoLevel'
