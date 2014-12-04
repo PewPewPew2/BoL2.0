@@ -1,6 +1,25 @@
 local clickDraw = {pos=nil, color='green'}
-local CO, SC, FO, RE, WA, SA, AB, GE, IC, AL, SS
-Callback.Bind('Load', function() Callbacks() end)
+local CO, FO, RE, SA, GE
+
+Callback.Bind('GameStart', function()
+	CO = CustomObjects()
+	GE = General()
+	FO = Follow()
+	RE = Recall()
+	SA = Safety()
+	
+	AutoBuy()
+	Warding()
+	SpellCast()
+	ItemCast()
+	AutoLevel()
+	SummSpells()
+	Unique()
+	
+	Menu = MenuConfig('Follower')
+	Menu:KeyBinding('fFollow', 'Set Primary to Selected Ally', 'T')
+	General:Print('Loaded')
+end)
 
 class 'Follow'
 function Follow:__init() 
@@ -9,11 +28,16 @@ function Follow:__init()
 	self.mostFedTime = 1600
 	self.PrimaryLastMove = 0
 	self.lastAction = 0
+	self:getPrimary()
+	Callback.Bind('Tick', function() self:Tick() end)
 	Callback.Bind('RecvPacket', function(p) self:OnRecvPacket(p) end)
 	Callback.Bind('ProcessSpell', function(unit, spell) self:ProcessSpell(unit, spell) end)
+	Callback.Bind('Draw', function() self:Draw() end)
+	Callback.Bind('WndMsg', function(m, k) self:WndMsg(m, k) end)
 end
 
 function Follow:Tick()
+	if Safety:InDanger() then Safety:Fallback() return end
 	if RE.GoingHome then return end
 	FO.tickTime = os.clock()
 	if FO.tickTime > FO.mostFedTime then
@@ -53,6 +77,7 @@ function Follow:Pursue(ally)
 		if v3b then
 			myHero:Move(v3b.x, v3b.z)
 			FO.lastAction = os.clock()
+			--Game.ShowGreenClick(v3b)
 			clickDraw.pos = v3b
 			clickDraw.color = 'green'
 		end
@@ -164,67 +189,109 @@ function Follow:getPrimary()
 		end
 	end	
 	if possibleADC == 1 then 
-		FO.Target.Primary = LastCandidate
+		self.Target.Primary = LastCandidate
 		General:Print('Primary - '..LastCandidate.charName)
 	else
-		self:getPrimaryBackup()
+		Utility.DelayAction(function() self:getPrimaryBackup() end, 120000)
 	end
 end
 
 function Follow:getPrimaryBackup()
-	if Game.Timer() < 80 then 
-		--self:getPrimaryBackup()
-	return end
-	local FromBottom = Geometry.Vector3(12321, 54, 1643)
-	local closest = nil
-	for _, ally in ipairs(CO.allies) do
-		if ally and self:smiteCheck(ally) then
-			if closest == nil or ally.pos:DistanceTo(FromBottom) < closest.pos:DistanceTo(FromBottom) then
-				closest = ally
+	for i, turret in ipairs(CO.atowers) do
+		if turret and not turret.dead and turret.valid and turret.name and turret.name:find('R_03') then
+			local botCount = {}
+			for _, ally in ipairs(CO.allies) do
+				if ally and self:smiteCheck(ally) and ally.pos:DistanceTo(turret.pos) < 3000 then
+					table.insert(botCount, #botCount+1, ally)
+				end
+			end
+			if #botCount == 1 then
+				self.Target.Primary = botCount[1]
+				General:Print('Primary - '..botCount[1].charName)
+				return
 			end
 		end
-	end		
-	FO.Target.Primary = closest
-	General:Print('Primary - '..closest.charName)
+	end
+	for i, turret in ipairs(CO.atowers) do
+		if turret and not turret.dead and turret.valid and turret.name and turret.name:find('L_03') then
+			local topCount = {}
+			for _, ally in ipairs(CO.allies) do
+				if ally and self:smiteCheck(ally) and ally.pos:DistanceTo(turret.pos) < 3000 then
+					table.insert(topCount, #topCount+1, ally)
+				end
+			end
+			if #topCount == 1 then
+				self.Target.Primary = topCount[1]
+				General:Print('Primary - '..topCount[1].charName)
+				return
+			end
+		end
+	end
 end
 
 function Follow:smiteCheck(ally)
 	return ally:GetSpellData(Game.Slots.SUMMONER_1).name:lower():find('smite') == nil and ally:GetSpellData(Game.Slots.SUMMONER_2).name:lower():find('smite') == nil
 end
 
-function Follow:moveToBotLane()
-	if myHero.team == 100 and myHero.pos:DistanceTo(GE.StartPos) < 600 then
-		myHero:Move(9865, 1090)
-	elseif myHero.team == 200 and myHero.pos:DistanceTo(GE.StartPos) < 600 then
-		myHero:Move(12850, 4200)
-	end	
-end
-
 function Follow:HugTurret()
-	if Game.Timer() > 1300 then return end
+	if Game.Timer() > 1080 then return end
 	for i, turret in ipairs(CO.atowers) do
-		Core.OutputDebugString(tostring(i))
 		if turret and not turret.dead and turret.valid and turret.name and turret.name:find('R_03') and turret.health and turret.health > 400 then
-			FO.Target.Secondary = turret
-			return
+			for _, minion in ipairs(CO.eMinions) do
+				if minion and turret.pos:DistanceTo(minion.pos) < 1800 then
+					FO.Target.Secondary = turret
+					return
+				end
+			end
 		end
 	end
 	FO.Target.Secondary = nil
 end
 
 function Follow:ProcessSpell(unit, spell)
-	if unit and unit == FO.Target.Primary then
-		FO.PrimaryLastMove = os.clock()
+	if unit and unit == self.Target.Primary then
+		self.PrimaryLastMove = os.clock()
 	end
 end
 
 function Follow:OnRecvPacket(p)
-	if p.header == 97 and FO.Target.Primary then
+	if p.header == 97 and self.Target.Primary then
 		p.pos = 12
-		if p:Decode4() == FO.Target.Primary.networkID then
-			FO.PrimaryLastMove = os.clock()
+		if p:Decode4() == self.Target.Primary.networkID then
+			self.PrimaryLastMove = os.clock()
 		end
 	end	
+end
+
+function Follow:Draw()
+	if self.Target.Primary ~= nil then
+		Render.GameCircle(self.Target.Primary, 100, Graphics.ARGB(255, 0, 255, 0):ToNumber()):Draw()
+	end
+	if self.Target.Secondary ~= nil then
+		Render.GameCircle(self.Target.Secondary, 100, Graphics.ARGB(255, 0, 0, 255):ToNumber()):Draw()
+	end
+	if clickDraw.pos ~= nil then
+		local wts = Graphics.WorldToScreen(clickDraw.pos)
+		local v2 = Geometry.Point(wts.x, wts.y)
+		if clickDraw.color == 'red' then
+			Graphics.DrawText("X", 35, v2.x, v2.y, Graphics.ARGB(255,255,0,0))
+		else
+			Graphics.DrawText("X", 35, v2.x, v2.y, Graphics.ARGB(255,0,255,0))
+		end					
+	end
+end
+
+function Follow:WndMsg(m, k)
+	if k == string.byte(Menu.fFollow:Value()) and m == 256 then
+		local sAlly = Game.Target()
+		if sAlly and sAlly.type == myHero.type and sAlly.team == myHero.team then
+			self.Target.Primary = sAlly
+			General:Print('Primary Manually set to: '..sAlly.charName)
+		end
+	end
+	if k == string.byte('X') and m == 256 then
+		General:Print(tostring(mousePos.x).."   "..tostring(mousePos.z))
+	end
 end
 
 class 'Recall'
@@ -232,16 +299,27 @@ class 'Recall'
 function Recall:__init()
 	self.RecallPosition = nil
 	self.GoingHome = false
+	Callback.Bind('Tick', function() self:Tick() end)
 end
 
 function Recall:Tick()
-	if self:ShouldRecall() and RE.RecallPosition == nil and not RE.GoingHome then
-		self:GetSafeRecallPos()
-		RE.GoingHome = true
+	if RE.GoingHome then Recall:CastRecall() end
+	Core.OutputDebugString('Not Going Home')
+	if self:ShouldRecall() then
+		Core.OutputDebugString('Should Recall')
+		if self.RecallPosition == nil then
+			Core.OutputDebugString('RecallPosNil')
+			if not self.GoingHome then
+				Core.OutputDebugString('Getting Recall Pos')
+				self:GetSafeRecallPos()
+				self.GoingHome = true
+			end
+		end
 	end
 	if myHero.pos:DistanceTo(GE.StartPos) < 700 and (myHero.health/myHero.maxHealth) >= 0.9 and (myHero.mana/myHero.maxMana) >= 0.9 then
-		RE.GoingHome = false
-		RE.RecallPosition = nil
+		Core.OutputDebugString('Recall Complete')
+		self.GoingHome = false
+		self.RecallPosition = nil
 	end	
 end
 
@@ -258,7 +336,7 @@ function Recall:GetSafeRecallPos()
 		SafeSpot = self:SafetyBush()
 	end
 	if SafeSpot and (GE.ClosestEnemy == nil or SafeSpot:DistanceTo(GE.ClosestEnemy.pos) > 1300) then
-		RE.RecallPosition = SafeSpot
+		self.RecallPosition = SafeSpot
 	end
 end
 
@@ -283,14 +361,15 @@ function Recall:SafetyBush()
 end
 
 function Recall:CastRecall()
+	Core.OutputDebugString('Should Be Recalling')
 	local asc = General:ActionSpamCheck()
 	if myHero.dead then return end
 	if RE.RecallPosition then 
 		if myHero.pos:DistanceTo(RE.RecallPosition) < 100 then
-			if self:RecallSafetyCheck() then
+			if RE:RecallSafetyCheck() then
 				myHero:CastSpell(Game.Slots.RECALL)
 			else
-				self:GetSafeRecallPos()
+				RE:GetSafeRecallPos()
 			end
 		elseif asc > 0.2 then
 			myHero:Move(RE.RecallPosition.x, RE.RecallPosition.z)
@@ -354,6 +433,7 @@ function Warding:__init()
 		{ x = 8424, 	y = 46, 	z = 6487},
 		{ x = 11823, 	y = 42, 	z = 3873},
 	}
+	Callback.Bind('Tick', function() self:Tick() end)
 	Callback.Bind('RecvPacket', function(p) self:RecvPacket(p) end)
 end
 
@@ -370,16 +450,16 @@ function Warding:RecvPacket(p)
 				local wardID = p:Decode4()+1
 				p:Skip(21)
 				local v3 = Geometry.Vector3(p:DecodeF(), p:DecodeF(), p:DecodeF())
-				table.insert(WA.wardPositions, #WA.wardPositions+1, { pos = v3, id = wardID })
+				table.insert(self.wardPositions, #self.wardPositions+1, { pos = v3, id = wardID })
 			end
 		end
 	end		
 	if p.header == 158 then
 		p.pos = 1
 		local wardId = p:Decode4()
-		for i=1, #WA.wardPositions do
-			if WA.wardPositions[i] and WA.wardPositions[i].id and WA.wardPositions[i].id == wardId then
-				table.remove(WA.wardPositions, i)
+		for i=1, #self.wardPositions do
+			if self.wardPositions[i] and self.wardPositions[i].id and self.wardPositions[i].id == wardId then
+				table.remove(self.wardPositions, i)
 				break
 			end
 		end
@@ -388,16 +468,16 @@ end
 				
 function Warding:Tick()
 	local currentTime = os.clock()
-	if (WA.LastWard+4) > currentTime then return end
+	if (self.LastWard+4) > currentTime then return end
 	
 	local WardSlot = self:GetWardSlot()
 	if WardSlot then
-		for i=1, #WA.wardSpots do 
-			local spot = Geometry.Vector3(WA.wardSpots[i].x, WA.wardSpots[i].y, WA.wardSpots[i].z)
+		for i=1, #self.wardSpots do 
+			local spot = Geometry.Vector3(self.wardSpots[i].x, self.wardSpots[i].y, self.wardSpots[i].z)
 			if spot and myHero.pos:DistanceTo(spot) <= 600 then
 				local wardNear = nil
-				for i=1, #WA.wardPositions do
-					local ward = WA.wardPositions[i]
+				for i=1, #self.wardPositions do
+					local ward = self.wardPositions[i]
 					if ward then
 						if wardNear == nil or spot:DistanceTo(ward.pos) < spot:DistanceTo(wardNear.pos) then
 							wardNear = ward
@@ -407,7 +487,7 @@ function Warding:Tick()
 				if wardNear == nil or (wardNear and spot:DistanceTo(wardNear.pos) > 1200) then  			
 					FO.lastAction = os.clock()
 					myHero:CastSpell(WardSlot, spot.x, spot.z)
-					WA.LastWard = os.clock()
+					self.LastWard = os.clock()
 				end
 			end
 		end
@@ -443,11 +523,12 @@ function Safety:__init()
 	self.DragonAggro = false
 	self.BaronAggro = false
 	self.FallBackPing = 0
+	Callback.Bind('Tick', function() self:Tick() end)
 	Callback.Bind('RecvPacket', function(p) self:OnRecvPacket(p) end)
 end
 
-function Safety:AvoidTowers()
-	if SA.HaveTowerAgro and SA.EscapeTurret ~= nil then
+function Safety:Tick()
+	if self.HaveTowerAgro and self.EscapeTurret ~= nil then
 		local EscapeTo = General:GetClosestTurret(myHero, myHero.team)
 		if EscapeTo then 
 			myHero:Move(EscapeTo.x, EscapeTo.z)
@@ -458,7 +539,7 @@ end
 
 function Safety:InDanger()
 	-- or SA.DragonAggro or SA.BaronAggro
-	return SA.HaveTowerAgro or SA.HeroAggro >= 1 or SA.MinionAggro >= (myHero.level+1) or SA.FallBackPing > os.clock() or (GE.ClosestEnemy ~= nil and not GE.ClosestEnemy.dead and myHero.pos:DistanceTo(GE.ClosestEnemy.pos) < 250) or SA.MinionAggro >= (myHero.level+1)
+	return SA.HaveTowerAgro or SA.HeroAggro >= 2 or SA.MinionAggro >= (myHero.level+1) or SA.FallBackPing > os.clock() or (GE.ClosestEnemy ~= nil and not GE.ClosestEnemy.dead and myHero.pos:DistanceTo(GE.ClosestEnemy.pos) < 250 and General:myHealthPct() < 75) or SA.MinionAggro >= (myHero.level+1)
 end
 
 function Safety:Fallback()
@@ -473,43 +554,43 @@ function Safety:OnRecvPacket(p)
 		p.pos = 1
 		local o = Game.ObjectByNetworkId(p:Decode4())
 		local aggro = p:Decode1()
-		if o.name:lower():find('minion') then
+		if o and o.name:lower():find('minion') then
 			if aggro >= 20 then
-				SA.MinionAggro = SA.MinionAggro + 1
-			elseif SA.MinionAggro ~= 0 then
+				self.MinionAggro = self.MinionAggro + 1
+			elseif self.MinionAggro ~= 0 then
 				if not o.visible or aggro == 0 then
-					SA.MinionAggro = SA.MinionAggro - 1
+					self.MinionAggro = self.MinionAggro - 1
 				end
 			end
 		end
 		--[[if o.name == 'Dragon6.1.1' then
 			if aggro == 29 then
-				SA.DragonAggro = true
+				self.DragonAggro = true
 			elseif aggro == 0 or not o.visible then
-				SA.DragonAggro = false
+				self.DragonAggro = false
 			end
 		end
 		if o.name == 'Worm12.1.1' then
 			if aggro == 29 then
-				SA.BaronAggro = true
+				self.BaronAggro = true
 			elseif aggro == 0 or not o.visible then
-				SA.BaronAggro = false
+				self.BaronAggro = false
 			end
 		end--]]
 		if o.name:lower():find('turret') then
 			if aggro >= 20 then
-				SA.HaveTowerAgro = true
-				SA.EscapeTurret = General:GetClosestTurret(myHero, 0)
+				self.HaveTowerAgro = true
+				self.EscapeTurret = General:GetClosestTurret(myHero, 0)
 			elseif aggro == 0 or not o.visible then
-				SA.HaveTowerAgro = false
-				SA.EscapeTurret = nil
+				self.HaveTowerAgro = false
+				self.EscapeTurret = nil
 			end
 		end
 		if o.type == myHero.type then
 			if aggro >= 20 then
-				SA.HeroAggro = SA.HeroAggro + 1
+				self.HeroAggro = self.HeroAggro + 1
 			elseif aggro == 0 or not o.visible then
-				SA.HeroAggro = SA.HeroAggro - 1
+				self.HeroAggro = self.HeroAggro - 1
 			end
 		end
 	end
@@ -519,7 +600,7 @@ function Safety:OnRecvPacket(p)
 			p.pos = 21
 			local pType = p:Decode1()
 			if pType == 5 or pType == 2 then
-				SA.FallBackPing = os.clock() + 2
+				self.FallBackPing = os.clock() + 2
 			end
 		end
 	end	
@@ -533,10 +614,17 @@ function AutoBuy:__init()
 	self.LastManaBuy = 0
 	self.BuyList = {}
 	self:TableInit()
+	self:ReloadCheck()
+	Callback.Bind('Tick', function() self:Tick() end)
 end
 
 function AutoBuy:TableInit()
-	if myHero.charName == 'Lux' or myHero.charName == 'Morgana' then
+	local ListOne   = { ['Lux'] = true, ['Morgana'] = true, }
+	local ListTwo   = { ['Zilean'] = true, ['Sona'] = true, }
+	local ListThree = { ['Blitzcrank'] = true, ['Soraka'] = true, }
+	local ListFour  = { ['FiddleSticks'] = true, }
+	
+	if ListOne[myHero.charName] then
 		self.BuyList = {
 			{itemID = 3301, haveBought = false, name = 'Coin'},
 			{itemID = 3340, haveBought = false, name = 'WardTrinket'},
@@ -560,27 +648,71 @@ function AutoBuy:TableInit()
 			{itemID = 3143, haveBought = false, name = 'Randuins'},	
 			{itemID = 3275, haveBought = false, name = 'Homeguard'},
 		}
-	elseif myHero.charName == 'Zilean' or myHero.charName == 'Sona' then
+	elseif ListTwo[myHero.charName] then
 		self.BuyList = {
-			[1] = {itemID = 3303, haveBought = false, name = 'Spellthief'}, --1
-			[2] = {itemID = 3340, haveBought = false, name = 'WardTrinket'},
-			[3] = {itemID = 1027, haveBought = false, name = 'ManaCrystal'}, --2
-			[4] = {itemID = 3070, haveBought = false, name = 'Tear'},			
-			[5] = {itemID = 1028, haveBought = false, name = 'RubyCrystal'}, --3
-			[6] = {itemID = 2049, haveBought = false, name = 'Sightstone'},
-			[7] = {itemID = 1001, haveBought = false, name = 'BootsT1'}, --4
-			[8] = {itemID = 3098, haveBought = false, name = 'FrostFang'}, 
-			[9] = {itemID = 3028, haveBought = false, name = 'Chalice'}, --5
-			[10] = {itemID = 3092, haveBought = false, name = 'FrostQueen'},
-			[11] = {itemID = 3114, haveBought = false, name = 'ForbiddenIdol'},
-			[12] = {itemID = 3111, haveBought = false, name = 'MercTreads'},
-			[13] = {itemID = 3222, haveBought = false, name = 'Crucible'},
-			[14] = {itemID = 2045, haveBought = false, name = 'RubySightstone'},
-			[15] = {itemID = 3362, haveBought = false, name = 'TrinketT2'},
-			[16] = {itemID = 3024, haveBought = false, name = 'Glacial'}, --6
-			[17] = {itemID = 3110, haveBought = false, name = 'FrozenHeart'},
-			[18] = {itemID = 3007, haveBought = false, name = 'ArchStaff'},	
-			[19] = {itemID = 3275, haveBought = false, name = 'Homeguard'},
+			{itemID = 3303, haveBought = false, name = 'Spellthief'}, --1
+			{itemID = 3340, haveBought = false, name = 'WardTrinket'},
+			{itemID = 1027, haveBought = false, name = 'ManaCrystal'}, --2
+			{itemID = 3070, haveBought = false, name = 'Tear'},			
+			{itemID = 1028, haveBought = false, name = 'RubyCrystal'}, --3
+			{itemID = 2049, haveBought = false, name = 'Sightstone'},
+			{itemID = 1001, haveBought = false, name = 'BootsT1'}, --4
+			{itemID = 3098, haveBought = false, name = 'FrostFang'}, 
+			{itemID = 3028, haveBought = false, name = 'Chalice'}, --5
+			{itemID = 3092, haveBought = false, name = 'FrostQueen'},
+			{itemID = 3114, haveBought = false, name = 'ForbiddenIdol'},
+			{itemID = 3111, haveBought = false, name = 'MercTreads'},
+			{itemID = 3222, haveBought = false, name = 'Crucible'},
+			{itemID = 2045, haveBought = false, name = 'RubySightstone'},
+			{itemID = 3362, haveBought = false, name = 'TrinketT2'},
+			{itemID = 3024, haveBought = false, name = 'Glacial'}, --6
+			{itemID = 3110, haveBought = false, name = 'FrozenHeart'},
+			{itemID = 3003, haveBought = false, name = 'ArchStaff'},	
+			{itemID = 3275, haveBought = false, name = 'Homeguard'},
+		}
+	elseif ListThree[myHero.charName] then
+		self.BuyList = {
+			{itemID = 3301, haveBought = false, name = 'Coin'}, --1
+			{itemID = 3340, haveBought = false, name = 'WardTrinket'},
+			{itemID = 1028, haveBought = false, name = 'RubyCrystal'}, --2
+			{itemID = 2049, haveBought = false, name = 'Sightstone'},
+			{itemID = 1001, haveBought = false, name = 'BootsT1'}, --3
+			{itemID = 3096, haveBought = false, name = 'Nomad'},
+			{itemID = 3111, haveBought = false, name = 'MercTreads'},
+			{itemID = 1033, haveBought = false, name = 'NullMantle'}, --4
+			{itemID = 3082, haveBought = false, name = 'Wardens'}, --5
+			{itemID = 3105, haveBought = false, name = 'Aegis'},
+			{itemID = 3190, haveBought = false, name = 'Locket'},
+			{itemID = 1011, haveBought = false, name = 'GiantsBelt'},
+			{itemID = 3143, haveBought = false, name = 'Randuins'},
+			{itemID = 2045, haveBought = false, name = 'RubySightstone'},
+			{itemID = 3362, haveBought = false, name = 'TrinketT2'},
+			{itemID = 3069, haveBought = false, name = 'Talisman'},
+			{itemID = 3024, haveBought = false, name = 'Glacial'}, --6
+			{itemID = 3110, haveBought = false, name = 'FrozenHeart'},
+			{itemID = 3275, haveBought = false, name = 'Homeguard'},
+		}
+	elseif ListFour[myHero.charName] then
+		self.BuyList = {
+			{itemID = 3303, haveBought = false, name = 'Spellthief'}, --1
+			{itemID = 3340, haveBought = false, name = 'WardTrinket'},
+			{itemID = 1028, haveBought = false, name = 'RubyCrystal'}, --2
+			{itemID = 2049, haveBought = false, name = 'Sightstone'},
+			{itemID = 3098, haveBought = false, name = 'FrostFang'}, 
+			{itemID = 1001, haveBought = false, name = 'BootsT1'}, --3 
+			{itemID = 1052, haveBought = false, name = 'AmpTome'}, --4 
+			{itemID = 3136, haveBought = false, name = 'HauntGuise'}, 
+			{itemID = 3020, haveBought = false, name = 'SorcShoes'},
+			{itemID = 3191, haveBought = false, name = 'SeekArmGuard'}, --5 
+			{itemID = 3092, haveBought = false, name = 'FrostQueen'},
+			{itemID = 1058, haveBought = false, name = 'LargeRod'}, 
+			{itemID = 3157, haveBought = false, name = 'Zhonyas'}, 
+			{itemID = 1026, haveBought = false, name = 'BlastingWand'}, --6 
+			{itemID = 3151, haveBought = false, name = 'Liandrys'}, 
+			{itemID = 3089, haveBought = false, name = 'Rabadons'},
+			{itemID = 3362, haveBought = false, name = 'TrinketT2'},
+			{itemID = 3275, haveBought = false, name = 'Homeguard'},
+			
 		}
 	end
 end
@@ -595,12 +727,12 @@ end
 
 function AutoBuy:Items()
 	if self:TimeCheck() then
-		for i=1, #AB.BuyList do
-			if self:CheckForItem(AB.BuyList[i].itemID) ~= 0 then
-				AB.BuyList[i].haveBought = true				
-			elseif not AB.BuyList[i].haveBought and (i == 1 or AB.BuyList[i-1].haveBought) then			
-				Game.BuyItem(AB.BuyList[i].itemID)
-				AB.LastBuy = os.clock() + 0.25
+		for i=1, #self.BuyList do
+			if self:CheckForItem(self.BuyList[i].itemID) ~= 0 then
+				self.BuyList[i].haveBought = true				
+			elseif not self.BuyList[i].haveBought and (i == 1 or self.BuyList[i-1].haveBought) then			
+				Game.BuyItem(self.BuyList[i].itemID)
+				self.LastBuy = os.clock() + 0.25
 			end
 		end
 	end
@@ -608,27 +740,29 @@ end
 
 function AutoBuy:Potions()
 	if os.clock() < 1200 then
-		if self:CheckForItem(2003) == 0 and AB.LastHpBuy < os.clock() then 
+		if self:CheckForItem(2003) == 0 and self.LastHpBuy < os.clock() then 
 			Game.BuyItem(2003)
-			AB.LastHpBuy = os.clock() + 2
+			Game.BuyItem(2003)
+			self.LastHpBuy = os.clock() + 2
 		end	
-		if self:CheckForItem(2004) == 0 and AB.LastManaBuy < os.clock() then 
+		if self:CheckForItem(2004) == 0 and self.LastManaBuy < os.clock() then 
 			Game.BuyItem(2004)
-			AB.LastManaBuy = os.clock() + 2
+			Game.BuyItem(2004)
+			self.LastManaBuy = os.clock() + 2
 		end	
 	end
 end
 
 function AutoBuy:TimeCheck()
-	return AB.LastBuy < os.clock()
+	return self.LastBuy < os.clock()
 end
 
 function AutoBuy:ReloadCheck()
-	for i=#AB.BuyList, 1, -1 do
-		if AB.BuyList[i].itemID ~= nil and self:CheckForItem(AB.BuyList[i].itemID) ~= 0 then
-			AB.BuyList[i].haveBought = true
+	for i=#self.BuyList, 1, -1 do
+		if self.BuyList[i].itemID ~= nil and self:CheckForItem(self.BuyList[i].itemID) ~= 0 then
+			self.BuyList[i].haveBought = true
 			for j=i, 1, -1 do
-				AB.BuyList[j].haveBought = true
+				self.BuyList[j].haveBought = true
 			end
 			break
 		end
@@ -649,15 +783,18 @@ class 'General'
 
 function General:__init()
 	self.ClosestEnemy = nil
+	self.ClosestAlly = nil
 	self.StayInBrush = false
-	self.StartPos = nil
+	self.StartPos = (myHero.team == 100) and Geometry.Vector3(200, 90, 500) or Geometry.Vector3(13945, 90, 14210)
 	self.killCount = {}
+	Callback.Bind('Tick', function() self:Tick() end)
 	Callback.Bind('RecvPacket', function(p) self:OnRecvPacket(p) end)
 	Callback.Bind('SendPacket', function(p) self:OnSendPacket(p) end)
 end
 
 function General:Tick()
-	GE.ClosestEnemy = self:GetClosestEnemyHero()
+	self.ClosestEnemy = self:GetClosestEnemyHero()
+	self.ClosestAlly = self:GetClosestAllyHero()
 	--self:checkWaypoints()
 end
 
@@ -739,6 +876,18 @@ function General:GetClosestTurret(unit, team)
 	return ClosestTurretFromPos
 end
 
+function General:GetClosestAllyHero()
+	local closest = nil
+	for _, ally in ipairs(CO.allies) do
+		if ally and not ally.dead and ally ~= myHero then
+			if closest == nil or myHero.pos:DistanceTo(ally.pos) < myHero.pos:DistanceTo(closest.pos) then
+				closest = ally
+			end
+		end
+	end	
+	return closest
+end
+
 function General:GetClosestEnemyHero()
 	local closest = nil
 	for _, enemy in ipairs(CO.enemies) do
@@ -752,13 +901,25 @@ function General:GetClosestEnemyHero()
 end
 
 function General:PrimaryInBrush()
-	if GE.ClosestEnemy == nil or (GE.ClosestEnemy and myHero.pos:DistanceTo(GE.ClosestEnemy.pos) > 400) then
+	if self.ClosestEnemy == nil or (self.ClosestEnemy and myHero.pos:DistanceTo(self.ClosestEnemy.pos) > 400) then
 		if FO.Target.Primary and Game.IsGrass(FO.Target.Primary.pos) then
-			GE.StayInBrush = true
+			self.StayInBrush = true
 			return
 		end
 	end	
-	GE.StayInBrush = false
+	self.StayInBrush = false
+end
+
+function General:HasBuff(unit, buff)
+	for i = 1, unit.buffCount do
+		local eBuff = unit:GetBuff(i)
+		if eBuff.valid then
+			if eBuff.name:lower():find(buff) then
+				return true
+			end
+		end	
+	end
+	return false
 end
 
 function General:OnRecvPacket(p)
@@ -778,14 +939,14 @@ function General:OnRecvPacket(p)
 	if p.header == 94 then	
 		p.pos=10
 		local killer = Game.ObjectByNetworkId(p:Decode4())
-		if killer.team == myHero.team then
-			for name, kills in pairs(GE.killCount) do
+		if killer and killer.team == myHero.team then
+			for name, kills in pairs(self.killCount) do
 				if name == killer.name then
-					GE.killCount[name] = kills+1
+					self.killCount[name] = kills+1
 					return
 				end
 			end
-			GE.killCount[killer.name] = 1
+			self.killCount[killer.name] = 1
 		end
 	end
 end
@@ -810,29 +971,23 @@ function CustomObjects:__init()
 	self.allies = {}
 	self.eMinions = {}
 	for i=1, Game.ObjectCount() do
-		local object = Game.Object(i)
-		if object then
-			if object.type == 'obj_AI_Turret' then
-				if object.team == myHero.team then
-					table.insert(self.atowers, #self.atowers+1, object)
-				else
-					table.insert(self.etowers, #self.etowers+1, object)
-				end
+		local o = Game.Object(i)
+		if o then
+			if o.type == 'obj_AI_Turret' then
+				table.insert((o.team == myHero.team) and self.atowers or self.etowers, (o.team == myHero.team) and #self.atowers+1 or #self.etowers+1, o)
 			end
-			if self:IsValid(object) then 
-				table.insert(self.eMinions, object)
+			if self:IsValid(o) then 
+				table.insert(self.eMinions, o)
 			end			
 		end
 	end
 	for i=1, Game.HeroCount() do
 		local hero = Game.Hero(i)
-		if hero and hero.team == myHero.team then
-			table.insert(self.allies, #self.allies+1, hero)
-		else
-			table.insert(self.enemies, #self.enemies+1, hero)
+		if hero then
+			table.insert((hero.team == myHero.team) and self.allies or self.enemies, (hero.team == myHero.team) and #self.allies+1 or #self.enemies+1, hero)
 		end
 	end
-	Callback.Bind('Tick', function() self:OnTick()	end)
+	Callback.Bind('Tick', function() self:OnTick() end)
 	Callback.Bind('CreateObj', function(o) self:OnCreateObj(o) end)
 	Callback.Bind('DeleteObj', function(o) self:OnDeleteObj(o) end)	
 end
@@ -842,9 +997,9 @@ function CustomObjects:IsValid(obj)
 end
 
 function CustomObjects:OnTick()
-	for i, m in ipairs(CO.eMinions) do
+	for i, m in ipairs(self.eMinions) do
 		if not self:IsValid(m) then
-			table.remove(CO.eMinions, i)
+			table.remove(self.eMinions, i)
 			i = i - 2
 		end
 	end
@@ -852,26 +1007,26 @@ end
 
 function CustomObjects:OnCreateObj(o)
 	if self:IsValid(o) then
-		table.insert(CO.eMinions, o)
+		table.insert(self.eMinions, o)
 	end
 end
 
 function CustomObjects:OnDeleteObj(o)
-	for i, m in ipairs(CO.eMinions) do
+	for i, m in ipairs(self.eMinions) do
 		if m == o then
-			table.remove(CO.eMinions, i)
+			table.remove(self.eMinions, i)
 			return
 		end
 	end
-	for i, t in ipairs(CO.etowers) do
+	for i, t in ipairs(self.etowers) do
 		if t == o then
-			table.remove(CO.etowers, i)
+			table.remove(self.etowers, i)
 			return
 		end
 	end
-	for i, t in ipairs(CO.atowers) do
+	for i, t in ipairs(self.atowers) do
 		if t == o then
-			table.remove(CO.atowers, i)
+			table.remove(self.atowers, i)
 			return
 		end
 	end
@@ -880,105 +1035,16 @@ function CustomObjects:OnDeleteObj(o)
 	end
 end
 
-class 'Callbacks'
-
-function Callbacks:__init()
-	Callback.Bind('GameStart', function() self:OnGameStart() end)
-end
-
-function Callbacks:OnGameStart()
-	CO = CustomObjects()
-	SC = SpellCast()
-	FO = Follow()
-	RE = Recall()
-	WA = Warding()
-	SA = Safety()
-	AB = AutoBuy()
-	GE = General()
-	IC = ItemCast()
-	AL = AutoLevel()
-	SS = SummSpells()
-	
-	GE.StartPos = (myHero.team == 100) and Geometry.Vector3(200, 90, 500) or Geometry.Vector3(13945, 90, 14210)
-	
-	Menu = MenuConfig('Follower')
-	Menu:KeyBinding('fFollow', 'Force On Selected', 'T')
-		
-	Follow:moveToBotLane()
-	Follow:getPrimary()
-	AutoBuy:ReloadCheck()
-	
-	Callback.Bind('Tick', function() self:OnTick() end)
-	Callback.Bind('Draw', function() self:OnDraw() end)
-	Callback.Bind('WndMsg', function(msg, key) self:OnWndMsg(msg, key) end)
-	General:Print('Loaded')
-end
-
-function Callbacks:OnTick()
-	General:Tick()
-	--Core.OutputDebugString('General')
-	SpellCast:Tick()
-	--Core.OutputDebugString('SpellCast')
-	ItemCast:Tick()
-	--Core.OutputDebugString('ItemCast')
-	Recall:Tick()
-	--Core.OutputDebugString('Recall')
-	SummSpells:Tick()
-	--Core.OutputDebugString('SummonerSpells')
-	AutoBuy:Tick()
-	--Core.OutputDebugString('AutoBuy')
-	if RE.GoingHome then Recall:CastRecall() return end
-	--Core.OutputDebugString('CastRecall')
-	Safety:AvoidTowers()
-	--Core.OutputDebugString('AvoidTowers')
-	if Safety:InDanger() then Safety:Fallback() return end
-	--Core.OutputDebugString('Fallback')
-	Follow:Tick()
-	--Core.OutputDebugString('Follow')
-	Warding:Tick()	
-	--Core.OutputDebugString('Warding')
-end
-
-function Callbacks:OnDraw()
-	if FO.Target.Primary ~= nil then
-		Graphics.DrawCircle(FO.Target.Primary.x, FO.Target.Primary.y, FO.Target.Primary.z, 100, Graphics.ARGB(0xFF,0,0xFF,0))
-	end
-	if FO.Target.Secondary ~= nil then
-		Graphics.DrawCircle(FO.Target.Secondary.x, FO.Target.Secondary.y, FO.Target.Secondary.z, 100, Graphics.ARGB(0xFF,0,0,0xFF))
-	end
-	if clickDraw.pos ~= nil then
-		local wts = Graphics.WorldToScreen(clickDraw.pos)
-		local v2 = Geometry.Point(wts.x, wts.y)
-		if clickDraw.color == 'red' then
-			Graphics.DrawText("X", 35, v2.x, v2.y, Graphics.ARGB(255,255,0,0))
-		else
-			Graphics.DrawText("X", 35, v2.x, v2.y, Graphics.ARGB(255,0,255,0))
-		end					
-	end
-end
-
-function Callbacks:OnWndMsg(m, k)
-	if k == string.byte(Menu.fFollow:Value()) and m == 256 then
-		local sAlly = Game.Target()
-		if sAlly and sAlly.type == myHero.type and sAlly.team == myHero.team then
-			FO.Target.Primary = sAlly
-			General:Print('Primary Manually set to: '..sAlly.charName)
-		end
-	end
-	if k == string.byte('X') and m == 256 then
-		General:Print(tostring(mousePos.x).."   "..tostring(mousePos.z))
-	end
-end
-
 class 'ItemCast'
 
 function ItemCast:__init()
-	
+	Callback.Bind('Tick', function() self:Tick() end)
 end
 
 function ItemCast:Tick()
 	self:MikaelsCrucible()
 	self:FrostQueen()
+	self:Zhonyas()
 	self:Potions()
 end
 
@@ -1048,14 +1114,50 @@ function ItemCast:MikaelsCrucible()
 	end
 end
 
+function ItemCast:Zhonyas()
+	if Warding:CheckForWard(3157) ~= 0 and GE.ClosestEnemy and myHero.pos:DistanceTo(GE.ClosestEnemy.pos) < 300 and General:myHealthPct() < 20 then
+		myHero:CastSpell(Warding:CheckForWard(3157))
+	end
+end
+
 class 'SpellCast'
 
 function SpellCast:__init()
-	self.SpellData = { qRange = 700, eRange = 700, rRange = 900, }
+	local charList = {
+		['Blitzcrank'] 		= {	['Q'] = { range = 850,   delay = 0.15, velocity = 1500, type = 'linCol',  condition = nil, },
+								['W'] = { range = nil,   delay = nil,  velocity = nil,  type = 'self',    condition = function() return RE.GoingHome or General:myManaPct() > 75 end, },
+								['E'] = { range = nil,   delay = nil,  velocity = nil,  type = 'self',    condition = function() return GE.ClosestEnemy and GE.ClosestEnemy.pos:DistanceTo(myHero.pos) < 250 end, },
+								['R'] = { range = 425,   delay = nil,  velocity = nil,  type = 'self',    condition = function() return GE.ClosestEnemy and GE.ClosestEnemy.pos:DistanceTo(myHero.pos) < 400 end, },
+							},
+		['Zilean']  	   = {  ['Q'] = { range = 700,   delay = nil,  velocity = nil,  type = 'target',  condition = nil, },
+								['W'] = { range = nil,   delay = nil,  velocity = nil,  type = 'self',    condition = function() return (myHero:GetSpellData(Game.Slots.SPELL_1).cd - myHero:GetSpellData(Game.Slots.SPELL_1).currentCd < 6 and General:myManaPct() > 40) or (myHero:GetSpellData(Game.Slots.SPELL_3).cd - myHero:GetSpellData(Game.Slots.SPELL_3).currentCd < 6 and General:myManaPct() > 40 and myHero.level > 10) end, },
+								['E'] = { range = 700,   delay = nil,  velocity = nil,  type = 'multi',   condition = function(unit) return not General:HasBuff(unit, 'timewarp') and (General:myManaPct() > 70 or myHero.level > 11) end, },
+								['R'] = { range = 900,   delay = nil,  velocity = nil,  type = 'ally',    condition = function(ally) return GE.ClosestEnemy and ally.pos:DistanceTo(GE.ClosestEnemy.pos) < 700 and (ally.health/ally.maxHealth) < 0.25 end, },
+							},
+		['Soraka']     	   = {  ['Q'] = { range = 950,   delay = 0.35, velocity = 1200, type = 'aoe',     condition = nil, },
+								['W'] = { range = 550,   delay = nil,  velocity = nil,  type = 'ally',    condition = function(ally) return ally ~= myHero and General:myHealthPct() > ((ally.health*100)/ally.maxHealth) end, },
+								['E'] = { range = 600, 	 delay = 0.35, velocity = 2000, type = 'aoe',     condition = nil, },
+								['R'] = { range = 50000, delay = nil,  velocity = nil,  type = 'ally',    condition = function(ally) return ((ally.health*100)/ally.maxHealth) < 25 and ally.pos:DistanceTo(GE.StartPos) > 2000 end, },
+							},
+		['Sona']    	   = {  ['Q'] = { range = 800,   delay = nil,  velocity = nil,  type = 'self',    condition = function() return GE.ClosestEnemy and GE.ClosestEnemy.pos:DistanceTo(myHero.pos) < 800 end, },
+								['W'] = { range = 950,   delay = nil,  velocity = nil,  type = 'self',    condition = function() return (myHero.health/myHero.maxHealth < 0.8) or (GE.ClosestAlly and GE.ClosestAlly.health/GE.ClosestAlly.maxHealth < 0.8 and myHero.pos:DistanceTo(GE.ClosestAlly.pos) < 950) end, },
+								['E'] = { range = 350,   delay = nil,  velocity = nil,  type = 'self',    condition = function() return RE.GoingHome or General:myManaPct() > 75 end, },
+								['R'] = { range = 900,   delay = 0.5,  velocity = 2400, type = 'line',    condition = function() return GE.ClosestEnemy.health/GE.ClosestEnemy.maxHealth < 0.5 end, },
+							},
+		['FiddleSticks']   = {  ['Q'] = { range = 550,   delay = nil,  velocity = nil,  type = 'target',  condition = nil, },
+								['W'] = { range = 550,   delay = nil,  velocity = nil,  type = 'target',  condition = nil, },
+								['E'] = { range = 750,   delay = nil,  velocity = nil,  type = 'target',  condition = nil, },
+								['R'] = { range = 800,   delay = 1.75, velocity = nil,  type = 'channel', condition = function() return General:myHealthPct() > 70 end, },
+							},
+		}
+	self.SpellData = charList[myHero.charName]
+	self.channelBind = false
+	self.canMove = 0
+	Callback.Bind('Tick', function() self:Tick() end)
 end
 
 function SpellCast:Tick()
-	if General:IsRecalling(myHero) then return end
+	if General:IsRecalling(myHero) or myHero.dead then return end
 	if myHero:CanUseSpell(Game.Slots.SPELL_4) == Game.SpellState.READY then
 		self:AutoR()
 	end
@@ -1067,27 +1169,108 @@ function SpellCast:Tick()
 	end
 	if myHero:CanUseSpell(Game.Slots.SPELL_3) == Game.SpellState.READY then
 		self:AutoE()
-	end
+	end	
 end
 
 function SpellCast:AutoQ()
-	if GE.ClosestEnemy and myHero.pos:DistanceTo(GE.ClosestEnemy.pos) < SC.SpellData.qRange then
-		myHero:CastSpell(Game.Slots.SPELL_1, GE.ClosestEnemy)			
+	if self.SpellData.Q.type == 'linCol' then
+		self:LinearCollision(Game.Slots.SPELL_1, self.SpellData.Q.range, self.SpellData.Q.velocity, self.SpellData.Q.delay)
+	elseif self.SpellData.Q.type == 'target' then
+		self:Targeted(Game.Slots.SPELL_1, self.SpellData.Q.range)
+	elseif self.SpellData.Q.type == 'aoe' then
+		self:AreaOfEffect(Game.Slots.SPELL_1, self.SpellData.Q.range, self.SpellData.Q.velocity, self.SpellData.Q.delay)
+	elseif self.SpellData.Q.type == 'self' then
+		self:SelfSpell(Game.Slots.SPELL_1, self.SpellData.Q.condition)
 	end
 end
 
 function SpellCast:AutoW()
-	if myHero:GetSpellData(Game.Slots.SPELL_1).cd - myHero:GetSpellData(Game.Slots.SPELL_1).currentCd < 6 and General:myManaPct() > 40 then
-		myHero:CastSpell(Game.Slots.SPELL_2)
-	elseif myHero:GetSpellData(Game.Slots.SPELL_3).cd - myHero:GetSpellData(Game.Slots.SPELL_3).currentCd < 6 and General:myManaPct() > 40 and myHero.level > 10 then
-		myHero:CastSpell(Game.Slots.SPELL_2)
-	end	
+	if self.SpellData.W.type == 'self' then
+		self:SelfSpell(Game.Slots.SPELL_2, self.SpellData.W.condition)
+	elseif self.SpellData.W.type == 'ally' then
+		self:Ally(Game.Slots.SPELL_2, self.SpellData.W.range, self.SpellData.W.condition)
+	elseif self.SpellData.W.type == 'target' then
+		self:Targeted(Game.Slots.SPELL_2, self.SpellData.W.range)
+	end
 end
 
 function SpellCast:AutoE()
-	if GE.ClosestEnemy and (General:myManaPct() > 70 or myHero.level > 11) then
-		if myHero.pos:DistanceTo(GE.ClosestEnemy.pos) < SC.SpellData.eRange then
-			myHero:CastSpell(Game.Slots.SPELL_3, GE.ClosestEnemy)
+	if self.SpellData.E.type == 'self' then
+		self:SelfSpell(Game.Slots.SPELL_3, self.SpellData.E.condition)
+	elseif self.SpellData.E.type == 'multi' then
+		self:Multi(Game.Slots.SPELL_3, self.SpellData.E.range, self.SpellData.E.condition)
+	elseif self.SpellData.E.type == 'target' then
+		self:Targeted(Game.Slots.SPELL_3, self.SpellData.E.range)	
+	end
+end
+
+function SpellCast:AutoR()
+	if self.SpellData.R.type == 'self' then
+		self:SelfSpell(Game.Slots.SPELL_4, self.SpellData.R.condition)
+	elseif self.SpellData.R.type == 'ally' then
+		self:Ally(Game.Slots.SPELL_4, self.SpellData.R.range, self.SpellData.R.condition)
+	elseif self.SpellData.R.type == 'line' then 
+		self:Linear(Game.Slots.SPELL_4, self.SpellData.R.range, self.SpellData.R.velocity, self.SpellData.R.delay, self.SpellData.R.condition)
+	elseif self.SpellData.R.type == 'channel' then
+		self:Channel(Game.Slots.SPELL_4, self.SpellData.R.range, self.SpellData.R.delay, self.SpellData.R.condition)
+	end
+end
+
+function SpellCast:Channel(slot, range, delay, condition)
+	if not self.channelBind then
+		Callback.Bind('SendPacket', function(p)
+			if p.header ==154 then
+				p.pos = 6
+				if p:Decode1() == slot then
+					self.canMove = os.clock()+delay
+				end
+			end
+			if self.canMove > os.clock() then
+				if p.header == 114 then
+					p:Block()
+				elseif p.header == 154 then
+					p.pos =6
+					if p:Decode1() ~= slot then
+						p:Block()
+					end
+				end
+			end
+		end)
+		self.channelBind = true
+	end
+	if GE.ClosestEnemy and myHero.pos:DistanceTo(GE.ClosestEnemy.pos) < range and condition() then
+		myHero:CastSpell(slot, GE.ClosestEnemy.x, GE.ClosestEnemy.z)
+	end
+end
+
+function SpellCast:Linear(slot, range, velocity, delay, condition)
+	if GE.ClosestEnemy and myHero.pos:DistanceTo(GE.ClosestEnemy.pos) < range and condition() then
+		local CastPos = Prediction:getPrediction(GE.ClosestEnemy, velocity, delay)
+		if CastPos then
+			myHero:CastSpell(slot, CastPos.x, CastPos.z)
+		end
+	end
+end
+
+function SpellCast:LinearCollision(slot, range, velocity, delay)
+	if GE.ClosestEnemy and myHero.pos:DistanceTo(GE.ClosestEnemy.pos) < range then
+		local CastPos = Prediction:getPrediction(GE.ClosestEnemy, velocity, delay)
+		if CastPos and Prediction:Collision(myHero.pos, CastPos, range+50) then
+			myHero:CastSpell(slot, CastPos.x, CastPos.z)
+		end
+	end
+end
+
+function SpellCast:Targeted(slot, range)
+	if GE.ClosestEnemy and myHero.pos:DistanceTo(GE.ClosestEnemy.pos) < range then
+		myHero:CastSpell(slot, GE.ClosestEnemy)			
+	end	
+end
+
+function SpellCast:Multi(slot, range, condition)
+	if GE.ClosestEnemy then
+		if myHero.pos:DistanceTo(GE.ClosestEnemy.pos) < range and condition(GE.ClosestEnemy) then
+			myHero:CastSpell(slot, GE.ClosestEnemy)
 		else
 			local closestAlly = nil
 			for i, ally in ipairs(CO.allies) do
@@ -1098,34 +1281,63 @@ function SpellCast:AutoE()
 				end
 			end
 			if closestAlly then 
-				if myHero.pos:DistanceTo(closestAlly.pos) < SC.SpellData.eRange and not self:HasEBuff(closestAlly) then
-					myHero:CastSpell(Game.Slots.SPELL_3, closestAlly)
-				elseif not self:HasEBuff(myHero) then
-					myHero:CastSpell(Game.Slots.SPELL_3, myHero)
+				if myHero.pos:DistanceTo(closestAlly.pos) < range and condition(closestAlly) then
+					myHero:CastSpell(slot, closestAlly)
+				elseif condition(myHero) then
+					myHero:CastSpell(slot, myHero)
 				end
 			end
 		end
 	end
 end
 
-function SpellCast:AutoR()
-	for i, ally in ipairs(CO.allies) do
-		if ally and not ally.dead and (ally.health/ally.maxHealth) < 0.2 and myHero.pos:DistanceTo(ally.pos) < SC.SpellData.rRange and GE.ClosestEnemy and ally.pos:DistanceTo(GE.ClosestEnemy.pos) < 700 then
-			myHero:CastSpell(Game.Slots.SPELL_4, ally)
-		end
+function SpellCast:SelfSpell(slot, condition)
+	if condition() then
+		myHero:CastSpell(slot)
 	end	
 end
 
-function SpellCast:HasEBuff(unit)
-	for i = 1, unit.buffCount do
-		eBuff = unit:GetBuff(i)
-		if eBuff.valid then
-			if eBuff.name:lower():find('timewarp') then
-				return true
-			end
-		end	
+function SpellCast:Ally(slot, range, condition)
+	for i, ally in ipairs(CO.allies) do
+		if ally and not ally.dead and myHero.pos:DistanceTo(ally.pos) < range and condition(ally) then
+			myHero:CastSpell(slot, ally)
+		end
 	end
-	return false
+end
+
+function SpellCast:AreaOfEffect(slot, range, velocity, delay)
+	for _, enemy in ipairs(CO.enemies) do
+		if enemy and not enemy.dead and myHero.pos:DistanceTo(enemy.pos) < range then
+			local CastPos = Prediction:getPrediction(enemy, velocity, delay)
+			if CastPos then
+				myHero:CastSpell(slot, CastPos.x, CastPos.z)
+			end
+		end
+	end
+end
+
+class 'Unique'
+
+function Unique:__init()
+	Callback.Bind('Tick', function() self:Tick() end)
+end
+
+function Unique:Tick()
+	if Unique[myHero.charName] then
+		Unique[myHero.charName]()
+	end
+end
+
+function Unique:FiddleSticks()
+	for i=1, myHero.buffCount do
+		local b = myHero:GetBuff(i)
+		if b and b.valid and b.name:lower():find('crowstorm') then
+			if GE.ClosestEnemy then
+				myHero:Move(GE.ClosestEnemy.x, GE.ClosestEnemy.z)
+				FO.lastAction = os.clock()
+			end
+		end
+	end
 end
 
 class 'SummSpells'
@@ -1135,14 +1347,15 @@ function SummSpells:__init()
 	local s2 = myHero:GetSpellData(Game.Slots.SUMMONER_2).name:lower()
 	self.summoner1 = (s1:find('summonerdot') and 'Ignite') or (s1:find('exhaust') and 'Exhaust') or (s1:find('flash') and 'Flash') or (s1:find('heal') and 'Heal') or nil
 	self.summoner2 = (s2:find('summonerdot') and 'Ignite') or (s2:find('exhaust') and 'Exhaust') or (s2:find('flash') and 'Flash') or (s2:find('heal') and 'Heal') or nil
+	Callback.Bind('Tick', function() self:Tick() end)
 end
 
 function SummSpells:Tick()
-	if SS.summoner1 then
-		self[SS.summoner1]()
+	if self.summoner1 then
+		self[self.summoner1]()
 	end
-	if SS.summoner2 then
-		self[SS.summoner2]()
+	if self.summoner2 then
+		self[self.summoner2]()
 	end
 end
 
@@ -1193,16 +1406,17 @@ end
 class 'AutoLevel'
 
 function AutoLevel:__init()
-	if myHero.charName == 'Zilean' then
-		self.SkillSequence = {0,1,0,2,0,3,0,2,0,2,2,2,1,1,1,1,3,3}
-		if myHero.level == 1 then
-			Game.LevelSpell(self.SkillSequence[1])
-		end					
-	elseif myHero.charName == 'Lux' then
-		self.SkillSequence = {0,2,2,1,2,3,2,0,2,0,3,0,0,1,1,3,1,1}
-		if myHero.level == 1 then
-			Game.LevelSpell(self.SkillSequence[1])
-		end							
+	local skillSequences = {
+		['Zilean']       = {0,1,0,2,0,3,0,2,0,2,2,2,1,1,1,1,3,3,},
+		--['Lux'] 	     = {0,2,2,1,2,3,2,0,2,0,3,0,0,1,1,3,1,1,},
+		['Blitzcrank']   = {0,2,0,1,0,3,0,2,0,2,3,2,2,1,1,3,1,1,},
+		['Soraka']       = {0,1,0,1,0,3,0,1,0,1,3,1,2,2,2,3,2,2,},
+		['Sona']         = {0,1,1,2,1,3,1,0,1,0,3,0,0,2,2,3,2,2,},
+		['FiddleSticks'] = {2,0,2,0,2,3,2,0,2,0,3,0,1,1,1,3,1,1,},
+	}
+	self.SkillSequence = skillSequences[myHero.charName]
+	if myHero.level == 1 then
+		Game.LevelSpell(self.SkillSequence[1])
 	end
 	Callback.Bind('RecvPacket', function(p) self:OnRecvPacket(p) end)
 end
@@ -1211,7 +1425,7 @@ function AutoLevel:OnRecvPacket(p)
 	if p.header == 63 then
 		p.pos = 1
 		if p:Decode4() == myHero.networkID then
-			Game.LevelSpell(AL.SkillSequence[self:GetHeroLeveled() + 1])
+			Game.LevelSpell(self.SkillSequence[self:GetHeroLeveled() + 1])
 		end
 	end	
 end
@@ -1219,3 +1433,86 @@ end
 function AutoLevel:GetHeroLeveled()
 	return myHero:GetSpellData(Game.Slots.SPELL_1).level + myHero:GetSpellData(Game.Slots.SPELL_2).level + myHero:GetSpellData(Game.Slots.SPELL_3).level + myHero:GetSpellData(Game.Slots.SPELL_4).level
 end
+
+class 'Prediction'
+
+function Prediction:__init()
+
+end
+
+function Prediction:getPrediction(unit, velocity, delay)
+	if unit == nil then return end
+	local pathPot = (unit.ms*(myHero.pos:DistanceTo(unit.pos)/velocity))+delay
+	local pathSum = 0
+	local pathHit = nil
+	local pathPoints = (type(unit.path) == 'NavigationPath' and unit.path or nil)
+	if pathPoints ~= nil and type(pathPoints.count) == 'number' and pathPoints.count < 10 then
+		for i=pathPoints.curPath, pathPoints.count do
+			local pathEnd = pathPoints:Path(i)
+			if type(pathEnd) == "Vector3" then
+				if type(pathPoints:Path(i-1)) == "Vector3" then
+					local iPathDist = (pathPoints:Path(i-1):DistanceTo(pathEnd))
+					pathSum = pathSum + iPathDist
+					if pathSum > pathPot and pathHit == nil then
+						pathHit = pathPoints:Path(i)
+						local v = pathPoints:Path(i-1) + (pathPoints:Path(i)-pathPoints:Path(i-1)):Normalize()*pathPot
+						return v, pathPot
+					end
+				end
+			end
+		end
+	end
+end
+
+function Prediction:Collision(startPos, endPos, range)
+	local colCount = 0
+	local function Perpendicular(v) return Geometry.Vector3(-v.z, v.y, v.x) end
+	local function Perpendicular2(v) return Geometry.Vector3(v.z, v.y, -v.x) end
+	local realEndPos = startPos + (endPos-startPos):Normalize()*range
+	local direction = startPos-realEndPos
+	local endLeftDir = realEndPos + Perpendicular2(direction)
+	local endRightDir = realEndPos + Perpendicular(direction)
+	local endLeft = realEndPos + (realEndPos-endLeftDir):Normalize()*130
+	local endRight = realEndPos + (realEndPos-endRightDir):Normalize()*130	
+	local direction2 = realEndPos-startPos
+	local startLeftDir = startPos + Perpendicular2(direction2)
+	local startRightDir = startPos + Perpendicular(direction2)
+	local startLeft = startPos + (startPos-startLeftDir):Normalize()*130
+	local startRight = startPos + (startPos-startRightDir):Normalize()*130
+	local spellPoly = Geometry.Polygon()
+	spellPoly:Add(Geometry.Point(startLeft.x, startLeft.z))
+	spellPoly:Add(Geometry.Point(startRight.x, startRight.z))
+	spellPoly:Add(Geometry.Point(endLeft.x, endLeft.z))
+	spellPoly:Add(Geometry.Point(endRight.x, endRight.z))
+	for _, minion in ipairs(CO.eMinions) do
+		if minion and CustomObjects:IsValid(minion) and type(minion.pos) == "Vector3" and minion.pos:DistanceTo(myHero.pos) <= range then
+			if Geometry.Point(minion.pos.x, minion.pos.z):IsInside(spellPoly) then
+				colCount = colCount + 1
+			--[[
+			else
+				local pathPoints = (type(minion.path) == 'NavigationPath' and minion.path or nil)
+				if pathPoints ~= nil and colCount == 0 then
+					for i=pathPoints.curPath, pathPoints.count do
+						local pathEnd = (type(pathPoints:Path(i)) == 'Vector3' and pathPoints:Path(i) or nil)
+						if pathEnd then
+							if pathEnd:DistanceTo(minion.pos) < 250 then
+								if Geometry.Point(pathEnd.x, pathEnd.z):IsInside(spellPoly) then
+									colCount = colCount + 1
+								end
+							end
+						else
+							break
+						end
+					end
+				end
+				--]]
+			end
+		end
+	end
+	return colCount == 0
+end
+
+
+
+
+
