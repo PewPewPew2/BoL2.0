@@ -1316,30 +1316,6 @@ function SpellCast:AreaOfEffect(slot, range, velocity, delay)
 	end
 end
 
-class 'Unique'
-
-function Unique:__init()
-	Callback.Bind('Tick', function() self:Tick() end)
-end
-
-function Unique:Tick()
-	if Unique[myHero.charName] then
-		Unique[myHero.charName]()
-	end
-end
-
-function Unique:FiddleSticks()
-	for i=1, myHero.buffCount do
-		local b = myHero:GetBuff(i)
-		if b and b.valid and b.name:lower():find('crowstorm') then
-			if GE.ClosestEnemy then
-				myHero:Move(GE.ClosestEnemy.x, GE.ClosestEnemy.z)
-				FO.lastAction = os.clock()
-			end
-		end
-	end
-end
-
 class 'SummSpells'
 
 function SummSpells:__init()
